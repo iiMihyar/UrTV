@@ -3,6 +3,7 @@ package sa.urtv.screensaver;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.graphics.Typeface;
 import android.net.Uri;
@@ -65,6 +66,12 @@ public class SettingsActivity extends Activity {
         render();
     }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (list != null) render();
+    }
+
     private void render() {
         list.removeAllViews();
         TextView title = new TextView(this);
@@ -93,6 +100,10 @@ public class SettingsActivity extends Activity {
 
         header("بجانب الساعة");
         row("المحتوى", Prefs.panelLabel(prefs.panel()), R.drawable.ic_eye, new Runnable() { public void run() { pickPanel(false); } });
+
+        header("الموسيقى");
+        row("ربط مشغل الموسيقى", mediaAccessEnabled() ? "مفعّل · لعرض الأغنية والفنان والغلاف" : "اضغط لمنح إذن الوصول إلى الإشعارات",
+            R.drawable.ic_eye, new Runnable() { public void run() { openMediaAccess(); } });
 
         header("الشاشة الرئيسية (تلفزيونك)");
         row("بطاقة على الشاشة الرئيسية", Prefs.panelLabel(prefs.homePanel()), R.drawable.ic_eye,
@@ -396,6 +407,19 @@ public class SettingsActivity extends Activity {
             startActivity(new Intent(Settings.ACTION_DREAM_SETTINGS));
         } catch (ActivityNotFoundException e) {
             startActivity(new Intent(Settings.ACTION_SETTINGS));
+        }
+    }
+
+    private boolean mediaAccessEnabled() {
+        String enabled = Settings.Secure.getString(getContentResolver(), "enabled_notification_listeners");
+        return enabled != null && enabled.contains(new ComponentName(this, NowPlayingListener.class).flattenToString());
+    }
+
+    private void openMediaAccess() {
+        try {
+            startActivity(new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS"));
+        } catch (RuntimeException e) {
+            toast("افتح إعدادات التلفاز ثم الوصول إلى الإشعارات");
         }
     }
 

@@ -57,6 +57,16 @@
         </service>
 
         <service
+            android:name=".NowPlayingListener"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <service
             android:name=".UpdateJob"
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE" />
