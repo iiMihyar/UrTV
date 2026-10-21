@@ -208,6 +208,17 @@
   .mblock .big > span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;
     padding-bottom:.3em;margin-bottom:-.3em}  /* room for the dots under ي, ج… */
   .none-week{font-size:clamp(26px,2.5vw,54px);font-weight:700;font-family:'ThmanyahDisplay','Thmanyah',serif;color:#A79C85}
+  .f1-panel{margin-top:1.25vh;padding-top:.7vh;border-top:1px solid rgba(220,184,111,.20)}
+  .f1-head{display:flex;justify-content:space-between;align-items:baseline;gap:.7em}
+  .f1-title{font-size:clamp(11px,.88vw,16px);font-weight:500;color:#D6AF6B;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .f1-location{font-size:clamp(10px,.72vw,13px);font-weight:300;color:#9C9279;white-space:nowrap}
+  .f1-sessions{display:grid;grid-template-columns:1fr;gap:.15vh;margin-top:.45vh}
+  .f1-session{display:grid;grid-template-columns:minmax(5.2em,.9fr) minmax(0,1.5fr) auto;align-items:baseline;gap:.55em;
+    font-size:clamp(10px,.76vw,14px);line-height:1.25;color:#DED4C0;white-space:nowrap}
+  .f1-day{color:#9C9279;font-size:.9em}
+  .f1-session-name{overflow:hidden;text-overflow:ellipsis}
+  .f1-time{color:#E0BA74;font-variant-numeric:tabular-nums}
+  .f1-empty{font-size:clamp(10px,.76vw,14px);color:#9C9279}
 
   /* A new photo settles in over a minute, then holds still: an endless drift kept the TV redrawing
      the whole screen 60 times a second, for hours. */
@@ -311,6 +322,7 @@
       <div class="mrow" id="match-row">
         <div class="none-week">لا شيء هذا الأسبوع</div>
       </div>
+  <div class="f1-panel" id="f1-panel"><div class="f1-empty">جارٍ تحميل جدول الفورمولا ١…</div></div>
     </div>
   </footer>
 
@@ -709,13 +721,21 @@ async function fetchNext(id){
   return (j?.events || [])[0] || null;
 }
 function toDate(ev){
-  const s = ev.strTimestamp || `${ev.dateEvent}T${ev.strTime || '00:00:00'}`;
-  return new Date(s.endsWith('Z') ? s : s+'Z');
+  const s = String(ev.strTimestamp || `${ev.dateEvent}T${ev.strTime || '00:00:00'}`).trim();
+  if(/[zZ]$|[+-]\d\d:\d\d$/.test(s)) return new Date(s);
+  // TheSportsDB timestamps are UTC, but some basketball/football records use an unzoned US date string.
+  const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2}):(\d{2})\s*(AM|PM)$/i);
+  if(us){
+    const hour = (+us[4] % 12) + (us[7].toUpperCase() === 'PM' ? 12 : 0);
+    return new Date(Date.UTC(+us[3], +us[1]-1, +us[2], hour, +us[5], +us[6]));
+  }
+  // ISO timestamps without an offset are also UTC; local display is applied later with CONFIG.timezone.
+  return new Date(/[T ]/.test(s) ? s+'Z' : `${s}T00:00:00Z`);
 }
 
 // one slot per picked team: a result from the last 24h, else a fixture this week, else hidden
 // A game is over once its status says so, or 2.5 h after kick-off; its score stays up for a day after that.
-const FINAL = ['FT','AET','PEN','MATCH FINISHED'];
+const FINAL = ['FT','AET','AOT','PEN','MATCH FINISHED'];
 function finishedRecently(ev, now){
   if(!ev || ev.intHomeScore == null || ev.intAwayScore == null) return false;
   const k = toDate(ev).getTime(), end = k + 2.5*3600000;
@@ -766,8 +786,10 @@ function matchSlot(id, now, shown){
 
 function liveStatus(ev, t12){
   const st = (ev.strStatus || '').toUpperCase();
-  if(st === 'HT') return 'استراحة';
-  if(['FT','AET','PEN'].includes(st)) return 'انتهت';
+  if(['HT','BT'].includes(st)) return 'استراحة';
+  if(['FT','AET','AOT','PEN'].includes(st)) return 'انتهت';
+  if(/^Q[1-4]$/.test(st)) return `الربع ${ar(+st[1])}`;
+  if(st === 'OT') return 'وقت إضافي';
   const m = parseInt(ev.strProgress, 10);
   return isNaN(m) ? `بدأت ${t12}` : `الدقيقة ${ar(m)}`;
 }
@@ -823,6 +845,62 @@ async function loadMatches(){
   MATCHES_LOADED = true;
   renderMatches();
   if(CONFIG.panel === 'matches') renderPanel(false);
+}
+
+// The next Grand Prix weekend and every F1 session, converted from UTC to this TV's timezone.
+const F1_API = 'https://api.openf1.org/v1';
+const F1_SESSION_NAMES = {
+  'Practice 1':'تجارب حرة ١','Practice 2':'تجارب حرة ٢','Practice 3':'تجارب حرة ٣',
+  'Qualifying':'التصفيات التأهيلية','Sprint Qualifying':'تصفيات السبرنت','Sprint Shootout':'تصفيات السبرنت',
+  'Sprint':'سباق السبرنت','Race':'السباق'
+};
+function f1When(iso, withTime){
+  const date = new Date(iso);
+  const day = new Intl.DateTimeFormat(GREG,{timeZone:CONFIG.timezone,weekday:'short',day:'numeric',month:'short'}).format(date);
+  if(!withTime) return day;
+  const p = new Intl.DateTimeFormat('en-GB',{timeZone:CONFIG.timezone,hour:'2-digit',minute:'2-digit',hour12:false})
+    .formatToParts(date).reduce((a,x)=>(a[x.type]=x.value,a),{});
+  return fmt12(+p.hour % 24,+p.minute);
+}
+async function loadF1(){
+  const panel = document.getElementById('f1-panel');
+  try{
+    const year = riyadhParts().y;
+    const seasons = (await Promise.allSettled([year,year+1].map(async y=>{
+      const [sr,mr] = await Promise.all([
+        fetchT(`${F1_API}/sessions?year=${y}`,12000),
+        fetchT(`${F1_API}/meetings?year=${y}`,12000)
+      ]);
+      if(!sr.ok || !mr.ok) throw 0;
+      return {sessions:await sr.json(), meetings:await mr.json()};
+    }))).filter(x=>x.status === 'fulfilled').map(x=>x.value);
+    if(!seasons.length) throw 0;
+    const sessions = seasons.flatMap(x=>x.sessions || []);
+    const meetings = new Map(seasons.flatMap(x=>x.meetings || []).map(x=>[String(x.meeting_key),x]));
+    const groups = new Map();
+    for(const s of sessions){
+      if(s.is_cancelled || !F1_SESSION_NAMES[s.session_name]) continue;
+      const key = String(s.meeting_key);
+      if(!groups.has(key)) groups.set(key,[]);
+      groups.get(key).push(s);
+    }
+    const now = Date.now();
+    const next = [...groups.values()].map(list=>({
+      list,
+      race:list.find(s=>s.session_name === 'Race'),
+      meeting:meetings.get(String(list[0].meeting_key)) || {}
+    })).filter(g=>g.race && Date.parse(g.race.date_end || g.race.date_start) >= now)
+      .sort((a,b)=>Date.parse(a.race.date_start)-Date.parse(b.race.date_start))[0];
+    if(!next) throw 0;
+    const raceName = (next.meeting.meeting_name || next.meeting.meeting_official_name || 'Formula 1').replace(/\s+20\d{2}$/,'');
+    const place = [next.meeting.location,next.meeting.country_name].filter(Boolean).join('، ');
+    const entries = next.list.filter(s=>F1_SESSION_NAMES[s.session_name])
+      .sort((a,b)=>Date.parse(a.date_start)-Date.parse(b.date_start));
+    panel.innerHTML = `<div class="f1-head"><div class="f1-title">${esc(raceName)}</div><div class="f1-location">${esc(place)}</div></div>`
+      + `<div class="f1-sessions">${entries.map(s=>`<div class="f1-session"><span class="f1-day">${f1When(s.date_start,false)}</span><span class="f1-session-name">${F1_SESSION_NAMES[s.session_name]}</span><span class="f1-time">${f1When(s.date_start,true)}</span></div>`).join('')}</div>`;
+  }catch(e){
+    if(!panel.querySelector('.f1-sessions')) panel.innerHTML = '<div class="f1-empty">تعذّر تحميل جدول الفورمولا ١</div>';
+  }
 }
 
 const TICKERS = [
@@ -1220,8 +1298,8 @@ function applyBackground(force){
 }
 
 // Last painted panels, shown at once on the next start while fresh data loads.
-const SNAP_KEY = 'snap3:' + location.hash;   // bump when the panels' markup changes
-const SNAP_SEL = ['.markets', '#week-list', '#match-row'];
+const SNAP_KEY = 'snap4:' + location.hash;   // bump when the panels' markup changes
+const SNAP_SEL = ['.markets', '#week-list', '#match-row', '#f1-panel'];
 function saveSnap(){
   try{ localStorage.setItem(SNAP_KEY, JSON.stringify(SNAP_SEL.map(q => (document.querySelector(q)||{}).innerHTML || ''))); }catch(e){}
 }
@@ -1250,7 +1328,7 @@ function boot(){
   TICKERS.forEach(loadTicker);
   if(CONFIG.panel === 'none') document.querySelector('.week').style.display = 'none';
   else if(CONFIG.panel !== 'shows') renderPanel(false);   // its own data arrives with prayers, weather, matches
-  loadPrayers(); loadMatches(); if(CONFIG.panel === 'shows') loadWeek(); loadWeather();
+  loadPrayers(); loadMatches(); loadF1(); if(CONFIG.panel === 'shows') loadWeek(); loadWeather();
   applyNight(); pixelShift();
 
   setInterval(tickClock, 1000);
@@ -1260,6 +1338,7 @@ function boot(){
   setInterval(loadLive, 2*60000);
   setInterval(loadPrayers, 6*3600*1000);
   setInterval(loadMatches, 30*60*1000);
+  setInterval(loadF1, 6*3600*1000);
   setInterval(()=>TICKERS.forEach(loadTicker), 15*60*1000);
   if(CONFIG.panel === 'shows') setInterval(loadWeek, 6*3600*1000);
   setInterval(loadWeather, 30*60*1000);
@@ -1272,7 +1351,7 @@ function boot(){
   let lastDay = new Intl.DateTimeFormat('en-CA',{timeZone:CONFIG.timezone}).format(new Date());
   setInterval(()=>{
     const d = new Intl.DateTimeFormat('en-CA',{timeZone:CONFIG.timezone}).format(new Date());
-    if(d !== lastDay){ lastDay = d; loadPhotoIndex().then(() => applyBackground(true)); tickDates(); tickRamadan(); loadPrayers(); loadMatches(); if(CONFIG.panel === 'shows') loadWeek(); loadWeather(); renderPanel(false); }
+    if(d !== lastDay){ lastDay = d; loadPhotoIndex().then(() => applyBackground(true)); tickDates(); tickRamadan(); loadPrayers(); loadMatches(); loadF1(); if(CONFIG.panel === 'shows') loadWeek(); loadWeather(); renderPanel(false); }
   }, 60*1000);
 }
 

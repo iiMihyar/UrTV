@@ -257,7 +257,6 @@ public class SettingsActivity extends Activity {
         JSONArray a = new JSONArray();
         for (int i = 0; all != null && i < all.length(); i++) {
             JSONObject t = all.getJSONObject(i);
-            if (!"Soccer".equalsIgnoreCase(t.optString("strSport", "Soccer"))) continue;
             boolean inLeague = league == null;
             for (int k = 1; !inLeague && k <= 7; k++)
                 inLeague = league.equalsIgnoreCase(t.optString(k == 1 ? "strLeague" : "strLeague" + k));

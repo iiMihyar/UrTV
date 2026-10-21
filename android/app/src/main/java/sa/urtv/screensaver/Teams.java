@@ -17,8 +17,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
-/** Our club list, assets/shared/teams.json (every club of Prefs.LEAGUES and the national teams, built in CI):
- *  the same list the screen's names and the setup's find-team read. Empty if it can't be read, never a crash. */
+/** Bundled soccer clubs plus the hand-maintained cross-sport teams in shared/teams-extra.json. */
 final class Teams {
     private Teams() {}
 
@@ -31,7 +30,23 @@ final class Teams {
     static synchronized List<TeamSearch.Team> all(Context c) {
         if (all != null) return all;
         List<TeamSearch.Team> v = new ArrayList<>();
-        try (InputStream in = c.getAssets().open("shared/teams.json")) {
+        try {
+            read(c, "shared/teams.json", v);
+        } catch (Exception e) {
+            v.clear();
+            BY_ID.clear();
+        }
+        try {
+            read(c, "shared/teams-extra.json", v);
+        } catch (Exception ignored) {
+            // Older builds do not bundle the optional cross-sport list.
+        }
+        all = v;
+        return all;
+    }
+
+    private static void read(Context c, String asset, List<TeamSearch.Team> v) throws Exception {
+        try (InputStream in = c.getAssets().open(asset)) {
             ByteArrayOutputStream b = new ByteArrayOutputStream();
             byte[] buf = new byte[8192];
             int n;
@@ -46,12 +61,7 @@ final class Teams {
                 BY_ID.put(t.id, t);
                 if ("translit".equals(o.optString("arFrom"))) TRANSLIT.add(t.id);
             }
-        } catch (Exception e) {
-            v.clear();
-            BY_ID.clear();
         }
-        all = v;
-        return all;
     }
 
     private static String[] strings(JSONArray a) {

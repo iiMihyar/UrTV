@@ -30,6 +30,10 @@ try:
 except FileNotFoundError:   # an old checkout: search online only
     print("   (assets/shared/teams.json is missing: searching TheSportsDB only)", file=sys.stderr)
     CLUBS = []
+extra = SHARED / "teams-extra.json"
+if extra.is_file():
+    ids = {c["id"] for c in CLUBS}
+    CLUBS.extend(c for c in json.loads(extra.read_text(encoding="utf-8")) if c["id"] not in ids)
 API = "https://www.thesportsdb.com/api/v1/json/123/searchteams.php?t="
 # by path: `python -I` (how saver.sh runs this) leaves this folder off the import path
 _spec = importlib.util.spec_from_file_location("team_search", Path(__file__).resolve().parent / "team_search.py")

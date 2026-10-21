@@ -15,6 +15,7 @@ final class Prefs {
     // TheSportsDB id, Arabic name; more teams come from the in-app search
     static final String[][] TEAM_PRESETS = {
         {"136013", "الهلال"}, {"136137", "المنتخب السعودي"},
+        {"134862", "نيويورك نيكس"}, {"134879", "سان أنطونيو سبيرز"}, {"134922", "بالتيمور ريفنز"},
     };
 
     // League name exactly as TheSportsDB spells it (checked from CI by .github/tools/team_ids.py), Arabic label.
@@ -35,6 +36,8 @@ final class Prefs {
         {"UAE Pro League", "الدوري الإماراتي"},
         {"Qatar Stars League", "الدوري القطري"},
         {"American Major League Soccer", "الدوري الأمريكي"},
+        {"NBA", "دوري كرة السلة الأمريكي"},
+        {"NFL", "دوري كرة القدم الأمريكية"},
     };
 
     // TVMaze genre (sent to the page), Arabic label
