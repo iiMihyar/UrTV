@@ -138,8 +138,20 @@
   .week.matches-view .match-meta span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .week.matches-view .match-meta .match-venue{color:#CFC3A9}
   .week.matches-view .match-status{color:#E0BA74}
+  .week.matches-view .match-last{margin-top:.3vh;font-size:clamp(10px,.66vw,12px);line-height:1.35;color:#A99E86;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .week:not(.matches-view) #f1-panel{display:none}
-  .stage.matches-mode .p-match{display:none}
+  .stage.matches-mode .p-match > .label,.stage.matches-mode #match-row{display:none}
+  .stage.matches-mode .corner-quote{display:block}
+  .corner-quote{display:none;max-width:100%;text-align:left;direction:rtl}
+  .corner-quote .label{font-size:clamp(12px,.88vw,16px);letter-spacing:.08em;margin-bottom:.35vh}
+  .corner-quote ul{list-style:none;display:block}
+  .corner-quote li.quote{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:4;overflow:hidden;
+    white-space:normal;font-size:clamp(12px,.78vw,15px);line-height:1.5;color:#F6EEDC}
+  .corner-quote li.quote.hadith{font-size:clamp(11px,.72vw,14px);line-height:1.5}
+  .corner-quote li.quote .nar{font-size:.8em;color:#B9AE96}
+  .corner-quote li.quote .orn,.corner-quote li.quote .saw{font-family:'NotoMarks','Noto Naskh Arabic',serif;color:#D6AF6B}
+  .corner-quote li.src{margin-top:.25vh;font-size:clamp(10px,.66vw,12px);line-height:1.35;color:#A99E86;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
   .dates{text-align:right;flex-shrink:0}
   .hijri{font-size:clamp(19px,1.86vw,37px);font-weight:500;color:var(--sand);line-height:1.3}
@@ -332,6 +344,10 @@
       <div class="label">المباريات</div>
       <div class="mrow" id="match-row">
         <div class="none-week">لا شيء هذا الأسبوع</div>
+      </div>
+      <div class="corner-quote" id="corner-quote" hidden>
+        <div class="label" id="corner-quote-title"></div>
+        <ul id="corner-quote-list"></ul>
       </div>
     </div>
   </footer>
@@ -707,7 +723,7 @@ function arName(en, kind, id){
     if(k) return k;
   }
   const key = kind + ':' + en;
-  if(AR_NAMES[key] !== undefined) return AR_NAMES[key] || translit(en);
+  if(AR_NAMES[key] !== undefined) return AR_NAMES[key] || (kind === 'team' ? en : translit(en));
   if(!AR_PENDING.has(key)){
     AR_PENDING.add(key);
     arQueue = arQueue.then(async ()=>{            // one lookup at a time
@@ -719,7 +735,7 @@ function arName(en, kind, id){
       AR_PENDING.delete(key);
     });
   }
-  return translit(en);
+  return kind === 'team' ? en : translit(en);
 }
 const teamAr = (s, id) => arName(s, 'team', id);
 
@@ -843,7 +859,6 @@ async function fetchLast(id){
 }
 async function loadMatches(){
   // Query one team at a time: parallel requests to the free feed can trigger its rate limiter.
-  // The match card only needs upcoming fixtures, so it skips the extra last-results request.
   let answered = 0;
   for(let i=0; i<CONFIG.teamIds.length; i++){
     const id = CONFIG.teamIds[i];
@@ -851,9 +866,8 @@ async function loadMatches(){
       const ev = await fetchNext(id); answered++;
       if(ev){ if(MATCHES[id] && MATCHES[id].idEvent !== ev.idEvent) keepResult(id, MATCHES[id]); MATCHES[id] = ev; }
     }catch(e){}
-    if(CONFIG.panel !== 'matches'){
-      try{ const l = await fetchLast(id); answered++; if(l.length) RESULTS[id] = l; }catch(e){}
-    }
+    await new Promise(resolve => setTimeout(resolve, 700));
+    try{ const l = await fetchLast(id); answered++; if(l.length) RESULTS[id] = l; }catch(e){}
     if(i < CONFIG.teamIds.length - 1) await new Promise(resolve => setTimeout(resolve, 1000));
   }
   if(!answered && CONFIG.teamIds.length) return;    // offline: keep what is shown (the saved panels)
@@ -1108,19 +1122,32 @@ function matchRows(){
   const now = Date.now();
   return CONFIG.teamIds.map(id => {
     const ev = MATCHES[id] || (NEXT_LIST[id] || []).find(item => toDate(item).getTime() > now);
-    if(!ev) return '';
-    const t = toDate(ev).getTime();
-    if(!Number.isFinite(t) || t <= now) return '';
-    const isHome = String(ev.idHomeTeam) === String(id);
-    const team = teamAr(isHome ? ev.strHomeTeam : ev.strAwayTeam, id);
-    const opponent = teamAr(isHome ? ev.strAwayTeam : ev.strHomeTeam, isHome ? ev.idAwayTeam : ev.idHomeTeam);
-    const d = new Date(t);
-    const parts = new Intl.DateTimeFormat('en-GB', {timeZone:CONFIG.timezone, hour:'2-digit', minute:'2-digit', hour12:false})
-      .formatToParts(d).reduce((a, x) => (a[x.type] = x.value, a), {});
-    const date = new Intl.DateTimeFormat(GREG, {timeZone:CONFIG.timezone, weekday:'long', day:'numeric', month:'long'}).format(d);
-    const when = `${date} · ${fmt12(+parts.hour % 24, +parts.minute)}`;
-    const venue = ev.strVenue ? esc(ev.strVenue) : 'الملعب غير متاح';
-    return `<li class="match"><div class="match-title"><span>${esc(team)}</span><span class="versus">×</span><span>${esc(opponent)}</span></div><div class="match-meta"><span class="match-status">${when}</span><span class="match-venue">الملعب: ${venue}</span></div></li>`;
+    const last = [...(RESULTS[id] || []), ...(KEPT[id] || [])]
+      .filter(item => item && item.intHomeScore != null && item.intAwayScore != null && toDate(item).getTime() < now)
+      .sort((a,b)=>toDate(b)-toDate(a))[0];
+    let upcoming = '';
+    if(ev){
+      const t = toDate(ev).getTime();
+      if(Number.isFinite(t) && t > now){
+        const isHome = String(ev.idHomeTeam) === String(id);
+        const team = teamAr(isHome ? ev.strHomeTeam : ev.strAwayTeam, id);
+        const opponent = teamAr(isHome ? ev.strAwayTeam : ev.strHomeTeam, isHome ? ev.idAwayTeam : ev.idHomeTeam);
+        const d = new Date(t);
+        const parts = new Intl.DateTimeFormat('en-GB', {timeZone:CONFIG.timezone, hour:'2-digit', minute:'2-digit', hour12:false})
+          .formatToParts(d).reduce((a, x) => (a[x.type] = x.value, a), {});
+        const date = new Intl.DateTimeFormat(GREG, {timeZone:CONFIG.timezone, weekday:'long', day:'numeric', month:'long'}).format(d);
+        const when = `${date} · ${fmt12(+parts.hour % 24, +parts.minute)}`;
+        const venue = ev.strVenue ? esc(ev.strVenue) : 'الملعب غير متاح';
+        upcoming = `<div class="match-title"><span>${esc(team)}</span><span class="versus">×</span><span>${esc(opponent)}</span></div><div class="match-meta"><span class="match-status">${when}</span><span class="match-venue">الملعب: ${venue}</span></div>`;
+      }
+    }
+    let lastHtml = '';
+    if(last){
+      const score = `${ar(+last.intHomeScore)} - ${ar(+last.intAwayScore)}`;
+      const names = `${teamAr(last.strHomeTeam,last.idHomeTeam)} ${score} ${teamAr(last.strAwayTeam,last.idAwayTeam)}`;
+      lastHtml = `<div class="match-last">آخر مباراة: ${esc(names)}</div>`;
+    }
+    return upcoming || lastHtml ? `<li class="match">${upcoming || '<div class="match-title">لا توجد مباراة قادمة</div>'}${lastHtml}</li>` : '';
   }).filter(Boolean);
 }
 
@@ -1291,8 +1318,8 @@ function applyBackground(force){
 }
 
 // Last painted panels, shown at once on the next start while fresh data loads.
-const SNAP_KEY = 'snap6:' + location.hash;   // refresh the relocated schedule and upcoming race
-const SNAP_SEL = ['.markets', '#week-list', '#match-row', '#f1-panel'];
+const SNAP_KEY = 'snap7:' + location.hash;   // refresh match results and the corner quote
+const SNAP_SEL = ['.markets', '#week-list', '#match-row', '#f1-panel', '#corner-quote-list'];
 function saveSnap(){
   try{ localStorage.setItem(SNAP_KEY, JSON.stringify(SNAP_SEL.map(q => (document.querySelector(q)||{}).innerHTML || ''))); }catch(e){}
 }
@@ -1307,6 +1334,14 @@ function setMatchLayout(){
   if(CONFIG.panel !== 'matches') return;
   document.querySelector('.stage').classList.add('matches-mode');
   document.querySelector('.week').classList.add('matches-view');
+  renderCornerQuote();
+}
+function renderCornerQuote(){
+  const title = document.getElementById('corner-quote-title'), list = document.getElementById('corner-quote-list');
+  if(!title || !list) return;
+  const q = quoteOfDay();
+  title.textContent = q.title;
+  list.innerHTML = q.rows.join('');
 }
 
 function boot(){
@@ -1351,7 +1386,7 @@ function boot(){
   let lastDay = new Intl.DateTimeFormat('en-CA',{timeZone:CONFIG.timezone}).format(new Date());
   setInterval(()=>{
     const d = new Intl.DateTimeFormat('en-CA',{timeZone:CONFIG.timezone}).format(new Date());
-    if(d !== lastDay){ lastDay = d; loadPhotoIndex().then(() => applyBackground(true)); tickDates(); tickRamadan(); loadPrayers(); loadMatches(); loadF1(); if(CONFIG.panel === 'shows') loadWeek(); loadWeather(); renderPanel(false); }
+    if(d !== lastDay){ lastDay = d; loadPhotoIndex().then(() => applyBackground(true)); tickDates(); tickRamadan(); loadPrayers(); loadMatches(); loadF1(); if(CONFIG.panel === 'shows') loadWeek(); loadWeather(); renderPanel(false); renderCornerQuote(); }
   }, 60*1000);
 }
 
