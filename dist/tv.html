@@ -663,6 +663,17 @@ let MATCHES_LOADED = false;   // a refresh answered; until then the saved row st
 let MATCHES = {};   // team id -> next event
 let RESULTS = {};   // team id -> recent events
 let NEXT_LIST = {};   // team id -> upcoming events
+let LEAGUE_SCHEDULES = {};  // successful full schedule loads (even when a season has no completed games yet)
+// League-specific ESPN schedules include away fixtures; TheSportsDB's free team schedule is home-only.
+const TEAM_SCHEDULES = {
+  '136018':{path:'soccer/ksa.1',team:'2276'},
+  '133604':{path:'soccer/eng.1',team:'359'},
+  '133738':{path:'soccer/esp.1',team:'86'},
+  '134879':{path:'basketball/nba',team:'24',season:'nba'},
+  '134862':{path:'basketball/nba',team:'18',season:'nba'},
+  '134860':{path:'basketball/nba',team:'2',season:'nba'},
+  '134922':{path:'football/nfl',team:'33',season:'nfl'},
+};
 
 // ---------- team names in Arabic ----------
 // 1) built-in table, 2) the Arabic label on Wikidata (cached on the device), 3) transliteration meanwhile
@@ -744,11 +755,12 @@ function arName(en, kind, id){
 const teamAr = (s, id) => arName(s, 'team', id);
 
 async function fetchNext(id){
-  const r = await fetch(`https://www.thesportsdb.com/api/v1/json/${CONFIG.sportsKey}/eventsnext.php?id=${id}`,{cache:'no-store'});
+  const r = await fetchT(`https://www.thesportsdb.com/api/v1/json/${CONFIG.sportsKey}/eventsnext.php?id=${id}`,12000);
   if(!r.ok) throw 0;
   const j = await r.json();
   if(j?.events) NEXT_LIST[id] = j.events;
-  return (j?.events || [])[0] || null;
+  const now = Date.now(), list = j?.events || [];
+  return list.filter(ev => toDate(ev).getTime() > now).sort((a,b)=>toDate(a)-toDate(b))[0] || null;
 }
 function toDate(ev){
   const s = String(ev.strTimestamp || `${ev.dateEvent}T${ev.strTime || '00:00:00'}`).trim();
@@ -782,7 +794,8 @@ function keepResult(id, ev){
 }
 function resultsFor(id){
   const seen = new Set();
-  return [...(RESULTS[id] || []), ...(KEPT[id] || []), MATCHES[id]]
+  const local = LEAGUE_SCHEDULES[id] ? [] : (KEPT[id] || []);
+  return [...(RESULTS[id] || []), ...local, MATCHES[id]]
     .filter(ev => ev && ev.idEvent && !seen.has(ev.idEvent) && seen.add(ev.idEvent));
 }
 
@@ -861,17 +874,61 @@ async function fetchLast(id){
   const j = await r.json();
   return j.results || [];
 }
+function scheduleSeason(feed, now){
+  const d = new Date(now), year = d.getUTCFullYear(), month = d.getUTCMonth()+1;
+  if(feed.season === 'nba') return year + (month >= 7 ? 1 : 0); // league season is named for its ending year
+  if(feed.season === 'nfl') return month <= 2 ? year - 1 : year;
+  return month >= 7 ? year : year - 1; // soccer season starts in the second half of the year
+}
+async function fetchLeagueSchedule(id){
+  const feed = TEAM_SCHEDULES[id];
+  if(!feed) return [];
+  const season = scheduleSeason(feed, Date.now());
+  const url = `https://site.api.espn.com/apis/site/v2/sports/${feed.path}/teams/${feed.team}/schedule?season=${season}`;
+  const r = await fetchT(url, 12000);
+  if(!r.ok) throw 0;
+  const data = await r.json(), rows = data.events || [];
+  return rows.map(event=>{
+    const c = (event.competitions || [])[0], sides = c?.competitors || [];
+    const home = sides.find(x=>x.homeAway === 'home') || sides[0], away = sides.find(x=>x.homeAway === 'away') || sides[1];
+    if(!home || !away) return null;
+    const complete = !!c.status?.type?.completed;
+    const score = x => complete && x.score != null ? Number(x.score.value ?? x.score.displayValue) : null;
+    return {
+      idEvent:'espn:'+event.id, strTimestamp:event.date,
+      strHomeTeam:home.team.displayName, strAwayTeam:away.team.displayName,
+      idHomeTeam:String(home.team.id) === String(feed.team) ? id : 'espn:'+home.team.id,
+      idAwayTeam:String(away.team.id) === String(feed.team) ? id : 'espn:'+away.team.id,
+      intHomeScore:score(home), intAwayScore:score(away),
+      strStatus:complete ? 'FT' : (c.status?.type?.shortDetail || ''),
+      strVenue:c.venue?.fullName || '', strLeague:data.league?.name || data.season?.name || ''
+    };
+  }).filter(Boolean);
+}
 async function loadMatches(){
-  // Query one team at a time: parallel requests to the free feed can trigger its rate limiter.
+  // Use full league schedules for scores (including away matches); fall back to the free team feed for future fixtures.
   let answered = 0;
   for(let i=0; i<CONFIG.teamIds.length; i++){
     const id = CONFIG.teamIds[i];
     try{
-      const ev = await fetchNext(id); answered++;
-      if(ev){ if(MATCHES[id] && MATCHES[id].idEvent !== ev.idEvent) keepResult(id, MATCHES[id]); MATCHES[id] = ev; }
+      const schedule = await fetchLeagueSchedule(id); answered++;
+      LEAGUE_SCHEDULES[id] = true;
+      if(schedule.length){
+        const now = Date.now();
+        const completed = schedule.filter(ev=>ev.intHomeScore != null && ev.intAwayScore != null && toDate(ev).getTime() < now)
+          .sort((a,b)=>toDate(b)-toDate(a));
+        RESULTS[id] = completed.slice(0,8);
+        const upcoming = schedule.filter(ev=>toDate(ev).getTime() > now && !/postponed|cancelled|canceled/i.test(ev.strStatus || ''))
+          .sort((a,b)=>toDate(a)-toDate(b));
+        if(upcoming.length) MATCHES[id] = upcoming[0];
+      }
     }catch(e){}
-    await new Promise(resolve => setTimeout(resolve, 700));
-    try{ const l = await fetchLast(id); answered++; if(l.length) RESULTS[id] = l; }catch(e){}
+    if(!MATCHES[id] || toDate(MATCHES[id]).getTime() <= Date.now()){
+      try{
+        const ev = await fetchNext(id); answered++;
+        if(ev) MATCHES[id] = ev;
+      }catch(e){}
+    }
     if(i < CONFIG.teamIds.length - 1) await new Promise(resolve => setTimeout(resolve, 1000));
   }
   if(!answered && CONFIG.teamIds.length) return;    // offline: keep what is shown (the saved panels)
@@ -1126,7 +1183,8 @@ function matchRows(){
   const now = Date.now();
   return CONFIG.teamIds.map(id => {
     const ev = MATCHES[id] || (NEXT_LIST[id] || []).find(item => toDate(item).getTime() > now);
-    const last = [...(RESULTS[id] || []), ...(KEPT[id] || [])]
+    const lastPool = LEAGUE_SCHEDULES[id] ? (RESULTS[id] || []) : [...(RESULTS[id] || []), ...(KEPT[id] || [])];
+    const last = lastPool
       .filter(item => item && item.intHomeScore != null && item.intAwayScore != null && toDate(item).getTime() < now)
       .sort((a,b)=>toDate(b)-toDate(a))[0];
     let upcoming = '';
