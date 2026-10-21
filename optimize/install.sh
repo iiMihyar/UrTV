@@ -16,7 +16,10 @@ what="${1:?usage: optimize/install.sh saver|launcher|all|extras}"
 failed=0   # an extra that did not install: the rest are still tried, then run.sh must not count the step as done
 
 push_install() {   # $1 apk name, $2 package
-  if ! curl -fsSL -o "optimize/$1" "$REL/$1"; then
+  if [ "$2" = sa.urtv.screensaver ] && [ -n "${APK_FILE:-}" ]; then
+    if [ ! -f "$APK_FILE" ]; then echo "!! Screensaver APK not found: $APK_FILE"; exit 1; fi
+    cp "$APK_FILE" "optimize/$1"
+  elif ! curl -fsSL -o "optimize/$1" "$REL/$1"; then
     echo "!! Could not download $REL/$1 (tag ${APK_TAG:-apk-latest}): no such build, or no internet"; exit 1
   fi
   "$PY" -I optimize/tv.py --push-b64 "optimize/$1" "/data/local/tmp/$1"
