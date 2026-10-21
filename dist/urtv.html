@@ -142,19 +142,16 @@
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .week:not(.matches-view) #f1-panel{display:none}
   .stage.matches-mode .p-match > .label,.stage.matches-mode #match-row{display:none}
-  .stage.matches-mode .now-playing{display:flex}
-  .now-playing{display:none;align-items:center;gap:.8vw;max-width:100%;direction:ltr;text-align:left}
-  .player-art{width:clamp(54px,5.2vw,96px);height:clamp(54px,5.2vw,96px);flex:0 0 auto;display:grid;place-items:center;
-    overflow:hidden;border-radius:5px;background:linear-gradient(145deg,#39443D,#151E19);color:#D6AF6B;font-size:clamp(24px,2vw,38px)}
-  .player-art img{display:block;width:100%;height:100%;object-fit:cover}
-  .player-info{min-width:0;flex:1 1 auto}
-  .player-heading{font-size:clamp(12px,.88vw,16px);font-weight:500;letter-spacing:.08em;color:#D6AF6B;margin-bottom:.4vh}
-  .player-title{font-size:clamp(14px,.95vw,18px);font-weight:500;color:#F6EEDC;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .player-artist{margin-top:.15vh;font-size:clamp(11px,.76vw,14px);font-weight:300;color:#B9AE96;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .player-progress{height:2px;margin-top:.65vh;background:rgba(220,184,111,.24);overflow:hidden}
-  .player-progress-fill{display:block;width:0;height:100%;background:#DCB86F;transition:width .35s linear}
-  .player-times{display:flex;justify-content:space-between;margin-top:.2vh;font-size:clamp(9px,.58vw,11px);color:#9C9279;
-    font-variant-numeric:tabular-nums;direction:ltr}
+  .stage.matches-mode .corner-hadith{display:block}
+  .corner-hadith{display:none;max-width:100%;direction:rtl;text-align:right}
+  .corner-hadith-label{font-size:clamp(12px,.88vw,16px);letter-spacing:.04em;color:#D6AF6B;margin-bottom:.35vh}
+  .corner-hadith-text{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;
+    font-size:clamp(12px,.78vw,15px);line-height:1.55;color:#F6EEDC}
+  .corner-hadith-text.changing{animation:hadithIn .55s ease both}
+  .corner-hadith-text .nar{font-size:.88em;color:#B9AE96}
+  .corner-hadith-text .saw{font-family:'NotoMarks','Noto Naskh Arabic',serif;color:#D6AF6B;font-size:1.35em;line-height:1;vertical-align:-.1em}
+  .corner-hadith-source{margin-top:.3vh;font-size:clamp(10px,.66vw,12px);line-height:1.3;color:#A99E86}
+  @keyframes hadithIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
   .p-prayer .sub{white-space:normal;line-height:1.45}
   .p-prayer .sub .count-line{display:block}
 
@@ -350,15 +347,10 @@
       <div class="mrow" id="match-row">
         <div class="none-week">لا شيء هذا الأسبوع</div>
       </div>
-      <div class="now-playing" id="now-playing">
-        <div class="player-art" id="player-art"><img id="player-art-image" hidden><span id="player-art-fallback">♫</span></div>
-        <div class="player-info">
-          <div class="player-heading">يُشغّل الآن</div>
-          <div class="player-title" id="player-title">لا توجد موسيقى قيد التشغيل</div>
-          <div class="player-artist" id="player-artist">شغّل أغنية على التلفزيون</div>
-          <div class="player-progress"><span class="player-progress-fill" id="player-progress-fill"></span></div>
-          <div class="player-times"><span id="player-position">٠:٠٠</span><span id="player-duration">٠:٠٠</span></div>
-        </div>
+      <div class="corner-hadith" id="corner-hadith">
+        <div class="corner-hadith-label">أحاديث نبوية</div>
+        <div class="corner-hadith-text" id="corner-hadith-text"></div>
+        <div class="corner-hadith-source" id="corner-hadith-source"></div>
       </div>
     </div>
   </footer>
@@ -1246,9 +1238,23 @@ function quoteOfDay(){
     return {title:'آية اليوم', rows:[`<li class="quote"><span class="orn">﴿</span>${esc(v.text)}<span class="orn">﴾</span></li>`, `<li class="src">${esc(v.surah)} · ${ar(v.ayah)}</li>`]};
   }
   const h = HADITH[half % HADITH.length];
-  const saw = s => s.replace(/ﷺ/g, '<span class="saw">ﷺ</span>').replace(/[﴿﴾]/g, m => `<span class="orn">${m}</span>`);
-  const body = h.parts.map(([k, t]) => k === 'q' ? `«${saw(esc(t))}»` : `<span class="nar">${saw(esc(t))}</span>`).join(' ');
+  const body = hadithBody(h);
   return {title:'حديث اليوم', rows:[`<li class="quote hadith">${body}</li>`, `<li class="src">${esc(h.source)}</li>`]};
+}
+function hadithBody(h){
+  const saw = s => s.replace(/ﷺ/g, '<span class="saw">ﷺ</span>').replace(/[﴿﴾]/g, m => `<span class="orn">${m}</span>`);
+  return h.parts.map(([k, t]) => k === 'q' ? `«${saw(esc(t))}»` : `<span class="nar">${saw(esc(t))}</span>`).join(' ');
+}
+let CORNER_HADITH = -1;
+function renderCornerHadith(advance=false){
+  const text = document.getElementById('corner-hadith-text'), source = document.getElementById('corner-hadith-source');
+  if(!text || !source) return;
+  if(!HADITH.length){ text.textContent = 'لا تتوفر أحاديث الآن'; source.textContent = ''; return; }
+  CORNER_HADITH = advance && CORNER_HADITH >= 0 ? (CORNER_HADITH + 1) % HADITH.length : riyadhDayNumber() % HADITH.length;
+  const h = HADITH[CORNER_HADITH];
+  text.innerHTML = hadithBody(h);
+  source.textContent = h.source;
+  text.classList.remove('changing'); void text.offsetWidth; text.classList.add('changing');
 }
 
 const WX_CODES = {
@@ -1419,46 +1425,10 @@ function setMatchLayout(){
   document.querySelector('.week').classList.add('matches-view');
 }
 
-let PLAYER = {position:0,duration:0,playing:false,updated:0};
-function playerClock(ms){
-  const sec = Math.max(0,Math.floor(ms/1000)), min = Math.floor(sec/60);
-  return `${ar(String(min))}:${ar(String(sec%60).padStart(2,'0'))}`;
-}
-function drawPlayerProgress(){
-  const pos = PLAYER.position + (PLAYER.playing ? Math.max(0,Date.now()-PLAYER.updated) : 0);
-  const duration = Math.max(0,PLAYER.duration), pct = duration ? Math.max(0,Math.min(100,pos/duration*100)) : 0;
-  document.getElementById('player-progress-fill').style.width = pct + '%';
-  document.getElementById('player-position').textContent = playerClock(Math.min(pos,duration || pos));
-  document.getElementById('player-duration').textContent = playerClock(duration);
-}
-function renderNowPlaying(){
-  let state = null;
-  try{
-    if(_Q.get('musicdemo') === '1') state = {access:true,title:'على بالي',artist:'شيرين عبدالوهاب',album:'طريقي',position:98200,duration:241000,playing:true,art:'data:image/svg+xml;charset=UTF-8,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240"><defs><linearGradient id="g" x2="1" y2="1"><stop stop-color="#b45f36"/><stop offset="1" stop-color="#382c48"/></linearGradient></defs><rect width="240" height="240" fill="url(#g)"/><circle cx="178" cy="48" r="58" fill="#e2bd73" opacity=".6"/><text x="120" y="155" text-anchor="middle" font-size="88" fill="#fff0ce">♫</text></svg>')};
-    else if(window.UrTVMedia) state = JSON.parse(window.UrTVMedia.snapshot());
-    else state = {access:null};
-  }catch(e){}
-  const title = document.getElementById('player-title'), artist = document.getElementById('player-artist');
-  const image = document.getElementById('player-art-image'), fallback = document.getElementById('player-art-fallback');
-  if(state && state.title){
-    title.textContent = state.title;
-    artist.textContent = [state.artist,state.album].filter(Boolean).join(' · ') + (state.playing ? '' : ' · متوقف مؤقتًا');
-    if(state.art && image.src !== state.art){ image.src = state.art; image.hidden = false; fallback.hidden = true; }
-    else if(!state.art){ image.removeAttribute('src'); image.hidden = true; fallback.hidden = false; }
-    PLAYER = {position:Math.max(0,+state.position||0),duration:Math.max(0,+state.duration||0),playing:!!state.playing,updated:Date.now()};
-  }else{
-    title.textContent = state && state.access === false ? 'فعّل ربط مشغل الموسيقى من إعدادات التطبيق' : 'لا توجد موسيقى قيد التشغيل';
-    artist.textContent = state && state.access === null ? 'المعاينة لا تتصل بمشغل التلفزيون' : 'شغّل أغنية على التلفزيون';
-    image.removeAttribute('src'); image.hidden = true; fallback.hidden = false;
-    PLAYER = {position:0,duration:0,playing:false,updated:Date.now()};
-  }
-  drawPlayerProgress();
-}
-
 function boot(){
   if(CONFIG.widget){ bootWidget(); return; }
   setMatchLayout();
-  if(CONFIG.panel === 'matches') renderNowPlaying();
+  if(CONFIG.panel === 'matches') renderCornerHadith();
   restoreSnap();
   setTimeout(saveSnap, 15*1000);   // the dream can be killed before pagehide
   setInterval(saveSnap, 60*1000);
@@ -1481,8 +1451,7 @@ function boot(){
   setInterval(tickClock, 1000);
   setInterval(()=>{ tickDates(); tickRamadan(); if(CONFIG.panel === 'prayers') renderPanel(false); }, 15000);
   setInterval(tickPrayer, 1000);
-  if(CONFIG.panel === 'matches') setInterval(renderNowPlaying, 5000);
-  setInterval(drawPlayerProgress, 1000);
+  if(CONFIG.panel === 'matches') setInterval(() => renderCornerHadith(true), 3*60*1000);
   setInterval(() => renderMatches(false), 60000);
   setInterval(() => renderMatches(true), CONFIG.matchPageMs);
   setInterval(loadLive, 2*60000);

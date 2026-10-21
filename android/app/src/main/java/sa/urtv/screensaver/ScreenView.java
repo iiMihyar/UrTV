@@ -17,7 +17,6 @@ final class ScreenView {
     @SuppressWarnings("deprecation")
     static WebView create(final Context c) {
         WebView w = new WebView(c);
-        w.addJavascriptInterface(new NowPlayingBridge(c), "UrTVMedia");
         w.setBackgroundColor(0xFF040E09);   // no white flash before the page paints
         w.setFocusable(false);
         w.setVerticalScrollBarEnabled(false);
