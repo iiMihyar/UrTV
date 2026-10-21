@@ -130,6 +130,16 @@
   .week li.quote .nar .saw{font-size:1.45em}
   .week li.src{border-bottom:none;padding:.6vh 0 0;font-size:clamp(12px,.95vw,18px);color:#D6AF6B}
   .week .empty{color:#9A9078;font-size:clamp(14px,1.1vw,21px);font-weight:300;margin-top:1vh}
+  .week.matches-view{align-self:center}
+  .week.matches-view > ul li.match{display:block;white-space:normal;padding:.55vh 0}
+  .week.matches-view .match-title{font-size:clamp(15px,.98vw,19px);line-height:1.4;color:#F6EEDC}
+  .week.matches-view .match-title .versus{color:#D6AF6B;padding:0 .3em}
+  .week.matches-view .match-meta{display:flex;justify-content:space-between;gap:.8em;margin-top:.25vh;font-size:clamp(11px,.72vw,14px);line-height:1.35;color:#A99E86}
+  .week.matches-view .match-meta span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .week.matches-view .match-meta .match-venue{color:#CFC3A9}
+  .week.matches-view .match-status{color:#E0BA74}
+  .week:not(.matches-view) #f1-panel{display:none}
+  .stage.matches-mode .p-match{display:none}
 
   .dates{text-align:right;flex-shrink:0}
   .hijri{font-size:clamp(19px,1.86vw,37px);font-weight:500;color:var(--sand);line-height:1.3}
@@ -301,6 +311,7 @@
     <div class="week">
       <div class="hd" id="week-hd">هذا الأسبوع</div>
       <ul id="week-list"><li class="empty">جارٍ التحميل…</li></ul>
+      <div class="f1-panel" id="f1-panel"><div class="f1-empty">جارٍ تحميل جدول الفورمولا ١…</div></div>
     </div>
   </section>
 
@@ -322,7 +333,6 @@
       <div class="mrow" id="match-row">
         <div class="none-week">لا شيء هذا الأسبوع</div>
       </div>
-  <div class="f1-panel" id="f1-panel"><div class="f1-empty">جارٍ تحميل جدول الفورمولا ١…</div></div>
     </div>
   </footer>
 
@@ -351,7 +361,7 @@ const CONFIG = {
   // the card beside the clock: shows | prayers | forecast | matches | verse | none (#week=0 from older builds = none)
   panel: (p => ['shows','prayers','forecast','matches','verse','none'].includes(p) ? p : 'verse')
          (_Q.get('panel') || (_Q.get('week') === '0' ? 'none' : 'verse')),
-  matchesPerPage: 2,
+  matchesPerPage: 1,
   matchPageMs: 15000,
   // minutes from adhan to iqama (Ministry of Islamic Affairs defaults); Friday Dhuhr has none
   iqama: {Fajr:25, Dhuhr:20, Asr:20, Maghrib:10, Isha:20},
@@ -832,15 +842,20 @@ async function fetchLast(id){
   return j.results || [];
 }
 async function loadMatches(){
-  // never throw away a good fixture or result on a failed refresh
+  // Query one team at a time: parallel requests to the free feed can trigger its rate limiter.
+  // The match card only needs upcoming fixtures, so it skips the extra last-results request.
   let answered = 0;
-  await Promise.all(CONFIG.teamIds.map(async id=>{
+  for(let i=0; i<CONFIG.teamIds.length; i++){
+    const id = CONFIG.teamIds[i];
     try{
       const ev = await fetchNext(id); answered++;
       if(ev){ if(MATCHES[id] && MATCHES[id].idEvent !== ev.idEvent) keepResult(id, MATCHES[id]); MATCHES[id] = ev; }
     }catch(e){}
-    try{ const l = await fetchLast(id); answered++; if(l.length) RESULTS[id] = l; }catch(e){}
-  }));
+    if(CONFIG.panel !== 'matches'){
+      try{ const l = await fetchLast(id); answered++; if(l.length) RESULTS[id] = l; }catch(e){}
+    }
+    if(i < CONFIG.teamIds.length - 1) await new Promise(resolve => setTimeout(resolve, 1000));
+  }
   if(!answered && CONFIG.teamIds.length) return;    // offline: keep what is shown (the saved panels)
   MATCHES_LOADED = true;
   renderMatches();
@@ -865,39 +880,24 @@ function f1When(iso, withTime){
 async function loadF1(){
   const panel = document.getElementById('f1-panel');
   try{
-    const year = riyadhParts().y;
+    const year = riyadhParts().y, now = Date.now();
     const seasons = (await Promise.allSettled([year,year+1].map(async y=>{
-      const [sr,mr] = await Promise.all([
-        fetchT(`${F1_API}/sessions?year=${y}`,12000),
-        fetchT(`${F1_API}/meetings?year=${y}`,12000)
-      ]);
-      if(!sr.ok || !mr.ok) throw 0;
-      return {sessions:await sr.json(), meetings:await mr.json()};
-    }))).filter(x=>x.status === 'fulfilled').map(x=>x.value);
-    if(!seasons.length) throw 0;
-    const sessions = seasons.flatMap(x=>x.sessions || []);
-    const meetings = new Map(seasons.flatMap(x=>x.meetings || []).map(x=>[String(x.meeting_key),x]));
-    const groups = new Map();
-    for(const s of sessions){
-      if(s.is_cancelled || !F1_SESSION_NAMES[s.session_name]) continue;
-      const key = String(s.meeting_key);
-      if(!groups.has(key)) groups.set(key,[]);
-      groups.get(key).push(s);
-    }
-    const now = Date.now();
-    const next = [...groups.values()].map(list=>({
-      list,
-      race:list.find(s=>s.session_name === 'Race'),
-      meeting:meetings.get(String(list[0].meeting_key)) || {}
-    })).filter(g=>g.race && Date.parse(g.race.date_end || g.race.date_start) >= now)
-      .sort((a,b)=>Date.parse(a.race.date_start)-Date.parse(b.race.date_start))[0];
-    if(!next) throw 0;
-    const raceName = (next.meeting.meeting_name || next.meeting.meeting_official_name || 'Formula 1').replace(/\s+20\d{2}$/,'');
-    const place = [next.meeting.location,next.meeting.country_name].filter(Boolean).join('، ');
-    const entries = next.list.filter(s=>F1_SESSION_NAMES[s.session_name])
+      const r = await fetchT(`${F1_API}/meetings?year=${y}`,12000);
+      if(!r.ok) throw 0;
+      return r.json();
+    }))).filter(x=>x.status === 'fulfilled').flatMap(x=>x.value || []);
+    const meeting = seasons.filter(m=>!m.is_cancelled && Date.parse(m.date_end || m.date_start) >= now)
+      .sort((a,b)=>Date.parse(a.date_start)-Date.parse(b.date_start))[0];
+    if(!meeting) throw 0;
+    const sr = await fetchT(`${F1_API}/sessions?meeting_key=${meeting.meeting_key}`,12000);
+    if(!sr.ok) throw 0;
+    const sessions = (await sr.json()).filter(s=>!s.is_cancelled && F1_SESSION_NAMES[s.session_name])
       .sort((a,b)=>Date.parse(a.date_start)-Date.parse(b.date_start));
+    if(!sessions.some(s=>s.session_name === 'Race')) throw 0;
+    const raceName = (meeting.meeting_name || meeting.meeting_official_name || 'Formula 1').replace(/\s+20\d{2}$/,'');
+    const place = [meeting.location,meeting.country_name].filter(Boolean).join('، ');
     panel.innerHTML = `<div class="f1-head"><div class="f1-title">${esc(raceName)}</div><div class="f1-location">${esc(place)}</div></div>`
-      + `<div class="f1-sessions">${entries.map(s=>`<div class="f1-session"><span class="f1-day">${f1When(s.date_start,false)}</span><span class="f1-session-name">${F1_SESSION_NAMES[s.session_name]}</span><span class="f1-time">${f1When(s.date_start,true)}</span></div>`).join('')}</div>`;
+      + `<div class="f1-sessions">${sessions.map(s=>`<div class="f1-session"><span class="f1-day">${f1When(s.date_start,false)}</span><span class="f1-session-name">${F1_SESSION_NAMES[s.session_name]}</span><span class="f1-time">${f1When(s.date_start,true)}</span></div>`).join('')}</div>`;
   }catch(e){
     if(!panel.querySelector('.f1-sessions')) panel.innerHTML = '<div class="f1-empty">تعذّر تحميل جدول الفورمولا ١</div>';
   }
@@ -1071,9 +1071,9 @@ function renderPanel(animate){
     ul.innerHTML = `<li class="empty">${P === 'matches' ? 'لا مباريات هذا الأسبوع' : 'لا تتوفر بيانات الآن'}</li>`;
     return;
   }
-  if(P === 'matches' && rows.length > WEEK_ROWS){        // page through, like the shows
-    const start = (LIST_PAGE * WEEK_ROWS) % rows.length;
-    rows = Array.from({length: WEEK_ROWS}, (_, i) => rows[(start + i) % rows.length]);
+  if(P === 'matches' && rows.length > 1){
+    const start = LIST_PAGE % rows.length;
+    rows = [rows[start]];
   }
   ul.innerHTML = rows.join('');
   ul.classList.remove('flip');
@@ -1103,32 +1103,25 @@ function forecastRows(){
   });
 }
 
-// every followed team's games this week, plus results from the last day, in time order
+// upcoming fixture for each followed team, shown one team at a time
 function matchRows(){
-  const now = Date.now(), seen = new Set(), evs = [];
-  CONFIG.teamIds.forEach(id => {
-    const next = NEXT_LIST[id] || (MATCHES[id] ? [MATCHES[id]] : []);
-    next.forEach(ev => { if(ev && ev.idEvent && !seen.has(ev.idEvent)){ seen.add(ev.idEvent); evs.push(MATCHES[id] && MATCHES[id].idEvent === ev.idEvent ? MATCHES[id] : ev); } });
-    resultsFor(id).forEach(ev => { if(!seen.has(ev.idEvent)){ seen.add(ev.idEvent); evs.push(ev); } });
-  });
-  const day = d => new Intl.DateTimeFormat(GREG, {timeZone:CONFIG.timezone, weekday:'long'}).format(d);
-  const today = new Intl.DateTimeFormat('en-CA', {timeZone:CONFIG.timezone}).format(new Date());
-  return evs.map(ev => ({ev, t: toDate(ev).getTime()}))
-    .filter(x => finishedRecently(x.ev, now)
-      || (now < x.t + 2.5*3600000 && !FINAL.includes((x.ev.strStatus || '').toUpperCase())
-          && x.t - now <= CONFIG.weekWindowDays * 86400000))
-    .sort((a, b) => a.t - b.t)
-    .map(({ev, t}) => {
-      const d = new Date(t), scored = ev.intHomeScore != null && ev.intAwayScore != null;
-      const mid = scored && now >= t ? ` <span class="sc">${ar(+ev.intHomeScore)} - ${ar(+ev.intAwayScore)}</span> ` : ' × ';
-      const p = new Intl.DateTimeFormat('en-GB', {timeZone:CONFIG.timezone, hour:'2-digit', minute:'2-digit', hour12:false})
-        .formatToParts(d).reduce((a, x) => (a[x.type] = x.value, a), {});
-      const when = finishedRecently(ev, now) ? 'انتهت'
-        : now >= t ? '<span class="live">مباشر</span>'
-        : (new Intl.DateTimeFormat('en-CA', {timeZone:CONFIG.timezone}).format(d) === today ? 'اليوم' : day(d))
-          + ' ' + fmt12(+p.hour % 24, +p.minute);
-      return `<li><span>${esc(teamAr(ev.strHomeTeam, ev.idHomeTeam))}${mid}${esc(teamAr(ev.strAwayTeam, ev.idAwayTeam))}</span><span class="dt">${when}</span></li>`;
-    });
+  const now = Date.now();
+  return CONFIG.teamIds.map(id => {
+    const ev = MATCHES[id] || (NEXT_LIST[id] || []).find(item => toDate(item).getTime() > now);
+    if(!ev) return '';
+    const t = toDate(ev).getTime();
+    if(!Number.isFinite(t) || t <= now) return '';
+    const isHome = String(ev.idHomeTeam) === String(id);
+    const team = teamAr(isHome ? ev.strHomeTeam : ev.strAwayTeam, id);
+    const opponent = teamAr(isHome ? ev.strAwayTeam : ev.strHomeTeam, isHome ? ev.idAwayTeam : ev.idHomeTeam);
+    const d = new Date(t);
+    const parts = new Intl.DateTimeFormat('en-GB', {timeZone:CONFIG.timezone, hour:'2-digit', minute:'2-digit', hour12:false})
+      .formatToParts(d).reduce((a, x) => (a[x.type] = x.value, a), {});
+    const date = new Intl.DateTimeFormat(GREG, {timeZone:CONFIG.timezone, weekday:'long', day:'numeric', month:'long'}).format(d);
+    const when = `${date} · ${fmt12(+parts.hour % 24, +parts.minute)}`;
+    const venue = ev.strVenue ? esc(ev.strVenue) : 'الملعب غير متاح';
+    return `<li class="match"><div class="match-title"><span>${esc(team)}</span><span class="versus">×</span><span>${esc(opponent)}</span></div><div class="match-meta"><span class="match-status">${when}</span><span class="match-venue">الملعب: ${venue}</span></div></li>`;
+  }).filter(Boolean);
 }
 
 // verse one day, hadith the next. Verse texts come from the Quran API via CI (.github/tools/fetch_verses.py), never typed.
@@ -1298,7 +1291,7 @@ function applyBackground(force){
 }
 
 // Last painted panels, shown at once on the next start while fresh data loads.
-const SNAP_KEY = 'snap4:' + location.hash;   // bump when the panels' markup changes
+const SNAP_KEY = 'snap6:' + location.hash;   // refresh the relocated schedule and upcoming race
 const SNAP_SEL = ['.markets', '#week-list', '#match-row', '#f1-panel'];
 function saveSnap(){
   try{ localStorage.setItem(SNAP_KEY, JSON.stringify(SNAP_SEL.map(q => (document.querySelector(q)||{}).innerHTML || ''))); }catch(e){}
@@ -1310,8 +1303,15 @@ function restoreSnap(){
   }catch(e){}
 }
 
+function setMatchLayout(){
+  if(CONFIG.panel !== 'matches') return;
+  document.querySelector('.stage').classList.add('matches-mode');
+  document.querySelector('.week').classList.add('matches-view');
+}
+
 function boot(){
   if(CONFIG.widget){ bootWidget(); return; }
+  setMatchLayout();
   restoreSnap();
   setTimeout(saveSnap, 15*1000);   // the dream can be killed before pagehide
   setInterval(saveSnap, 60*1000);
@@ -1344,8 +1344,8 @@ function boot(){
   setInterval(loadWeather, 30*60*1000);
   setInterval(()=>{
     if(CONFIG.panel === 'shows' && WEEK_POOL.length > WEEK_ROWS){ WEEK_PAGE++; renderWeekPage(true); }
-    if(CONFIG.panel === 'matches'){ LIST_PAGE++; renderPanel(matchRows().length > WEEK_ROWS); }
   }, 25*1000);
+  if(CONFIG.panel === 'matches') setInterval(()=>{ LIST_PAGE++; renderPanel(matchRows().length > 1); }, CONFIG.matchPageMs);
   setInterval(applyNight, 60*1000);
   setInterval(pixelShift, 4*60*1000);
   let lastDay = new Intl.DateTimeFormat('en-CA',{timeZone:CONFIG.timezone}).format(new Date());
@@ -1357,6 +1357,7 @@ function boot(){
 
 // The launcher's card: the chosen panel only, refreshed like on the screensaver, nothing else loaded.
 function bootWidget(){
+  setMatchLayout();
   document.documentElement.classList.add('widget');
   restoreSnap();
   setTimeout(saveSnap, 15*1000);
@@ -1370,8 +1371,8 @@ function bootWidget(){
   if(P === 'matches'){ loadMatches(); setInterval(loadMatches, 30*60*1000); setInterval(loadLive, 2*60000); }
   setInterval(() => {
     if(P === 'shows' && WEEK_POOL.length > WEEK_ROWS){ WEEK_PAGE++; renderWeekPage(true); }
-    if(P === 'matches'){ LIST_PAGE++; renderPanel(matchRows().length > WEEK_ROWS); }
   }, 25*1000);
+  if(P === 'matches') setInterval(()=>{ LIST_PAGE++; renderPanel(matchRows().length > 1); }, CONFIG.matchPageMs);
   let lastDay = riyadhDayNumber();
   setInterval(() => { if(riyadhDayNumber() !== lastDay){ lastDay = riyadhDayNumber(); if(P === 'prayers') loadPrayers(); renderPanel(false); } }, 60*1000);
   reveal();
